@@ -1,5 +1,7 @@
 [package]
-name = "create-rust-app"
+# NOTE: the crates.io name carries the `-awesome-` infix because `create-rust-app`
+# is taken by an unrelated crate. The shipped binary stays `create-rust-app`.
+name = "create-awesome-rust-app"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.74"
