@@ -1,0 +1,132 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "create-rust-app@*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (create-rust-app@X.Y.Z). Defaults to ref when empty."
+        required: false
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    name: Verify version alignment
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Resolve tag
+        id: tag
+        run: |
+          set -euo pipefail
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          elif [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            echo "::error::No tag provided" >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#create-rust-app@}" >> "$GITHUB_OUTPUT"
+      - name: Check semver sync
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: ./scripts/check-version-sync.sh "${{ steps.tag.outputs.version }}"
+
+  build:
+    name: Build ${{ matrix.asset }}
+    needs: verify
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.optional }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset: create-rust-app-linux-x86_64
+            ext: ""
+            optional: false
+          - runner: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            asset: create-rust-app-linux-aarch64
+            ext: ""
+            optional: true
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+            asset: create-rust-app-darwin-aarch64
+            ext: ""
+            optional: true
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            asset: create-rust-app-darwin-x86_64
+            ext: ""
+            optional: true
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset: create-rust-app-windows-x86_64
+            ext: .exe
+            optional: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.88.0"  # keep in sync with rust-toolchain.toml
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cargo build --locked --release --target "${{ matrix.target }}" --bin create-rust-app
+          cp "target/${{ matrix.target }}/release/create-rust-app${{ matrix.ext }}" \
+            "dist/${{ matrix.asset }}${{ matrix.ext }}"
+          ls -la dist
+      - uses: actions/upload-artifact@v7
+        if: success()
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}${{ matrix.ext }}
+
+  release:
+    name: Upload GitHub Release assets
+    needs: build
+    if: always() && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Write checksums
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(create-rust-app-*)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::No release artifacts found" >&2
+            exit 1
+          fi
+          sha256sum "${files[@]}" > SHA256SUMS
+          cat SHA256SUMS
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            dist/create-rust-app-*
+            dist/SHA256SUMS
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+          draft: true

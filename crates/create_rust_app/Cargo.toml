@@ -1,0 +1,27 @@
+[package]
+# NOTE: the crates.io name carries the `-awesome-` infix because `create-rust-app`
+# is taken by an unrelated crate. The shipped binary stays `create-rust-app`.
+name = "create-awesome-rust-app"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+description = "Rust-native scaffolding CLI — compose templates and extensions into production-ready Rust projects"
+license = "MIT"
+repository = "https://github.com/Create-Rust-App/create-rust-app"
+homepage = "https://github.com/Create-Rust-App/create-rust-app"
+documentation = "https://github.com/Create-Rust-App/create-rust-app"
+keywords = ["scaffolding", "templates", "cli", "generator"]
+categories = ["development-tools", "command-line-utilities"]
+
+[[bin]]
+name = "create-rust-app"
+path = "src/main.rs"
+
+[dependencies]
+create_rust_app_core = { version = "0.1.0", path = "../create_rust_app_core" }
+clap = { version = "4", features = ["derive", "cargo"] }
+clap_complete = "4"
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
