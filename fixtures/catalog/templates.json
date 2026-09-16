@@ -1,0 +1,20 @@
+{
+  "templates": [
+    {
+      "slug": "web-server",
+      "description": "Axum web server starter",
+      "tags": ["web"]
+    },
+    {
+      "slug": "cli",
+      "description": "Clap CLI starter",
+      "tags": ["tooling"]
+    }
+  ],
+  "addons": [
+    {
+      "slug": "github-setup",
+      "description": "GitHub CI workflows and community files"
+    }
+  ]
+}
