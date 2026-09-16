@@ -20,7 +20,7 @@ use std::process::ExitCode;
 #[command(
     name = "create-rust-app",
     version,
-    about = "Scaffold Rust projects from templates and extensions\nExamples:\n  create-rust-app my-app --template web-server --addons github-setup --no-interactive"
+    about = "Scaffold Rust projects from templates and extensions\nExamples:\n  create-rust-app my-app --template axum-starter --addons all-github-setup --no-interactive"
 )]
 struct Cli {
     /// Project directory to create.
@@ -34,7 +34,10 @@ struct Cli {
     #[arg(short, long)]
     verbose: bool,
 
-    /// Template URL, file://, or slug.
+    /// Template slug, git URL (with optional `?subdir=`), or `file://`
+    /// directory. Empty selects the catalog's first template. The template
+    /// content is materialised into the new project (cached under the
+    /// scaffold cache; `--offline` reuses the cache).
     #[arg(short, long, default_value = "")]
     template: String,
 
@@ -396,18 +399,36 @@ fn run(cli: &Cli) -> ExitCode {
         force: cli.force,
         offline: cli.offline,
         keep_on_failure: cli.keep_on_failure,
+        cache_dir: if cli.cache_dir.is_empty() {
+            None
+        } else {
+            Some(std::path::PathBuf::from(&cli.cache_dir))
+        },
+        no_cache: cli.no_cache,
+        pin: if cli.pin.is_empty() {
+            None
+        } else {
+            Some(cli.pin.clone())
+        },
     };
     match scaffold(&options, &catalog) {
         Ok(target) => {
             println!("OK  Scaffolded {}", target.to_string_lossy());
             let skip_install = cli.no_install || cli.skip_install;
-            if !skip_install && !cli.offline && !options.template.is_empty() {
+            if !skip_install && !cli.offline {
                 // Best-effort post-scaffold check; never fails the run.
-                let _ = std::process::Command::new("cargo")
+                match std::process::Command::new("cargo")
                     .arg("check")
                     .arg("--quiet")
                     .current_dir(&target)
-                    .output();
+                    .output()
+                {
+                    Ok(output) if output.status.success() => {}
+                    _ => eprintln!(
+                        "note: post-scaffold `cargo check` reported issues (run `cargo check` in {} for details)",
+                        target.to_string_lossy()
+                    ),
+                }
             }
             ExitCode::SUCCESS
         }

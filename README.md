@@ -31,9 +31,9 @@ Installs `create-rust-app` and a `create-awesome-rust-app` alias into `~/.local/
 Then scaffold:
 
 ```bash
-create-rust-app my-app --template web-server --addons github-setup
+create-rust-app my-app --template axum-starter --addons all-github-setup
 # or
-create-awesome-rust-app my-app --template web-server --addons github-setup
+create-awesome-rust-app my-app --template axum-starter --addons all-github-setup
 ```
 
 Fallback (raw script from this repo):
@@ -68,8 +68,8 @@ Headless / CI:
 
 ```bash
 create-rust-app my-api \
-  --template web-server \
-  --addons github-setup \
+  --template axum-starter \
+  --addons all-github-setup \
   --no-interactive --no-install
 ```
 
