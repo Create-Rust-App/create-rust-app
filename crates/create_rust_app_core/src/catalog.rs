@@ -17,7 +17,7 @@ pub const DEFAULT_CATALOG_URL: &str =
 /// One scaffoldable project template.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TemplateEntry {
-    /// Stable slug used with `--template` (for example `web-server`).
+    /// Stable slug used with `--template` (for example `axum-starter`).
     pub slug: String,
     /// One-line human description.
     #[serde(default)]
@@ -25,16 +25,24 @@ pub struct TemplateEntry {
     /// Category tags used by `--category` filtering.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Where template content lives: `file://` directory, git URL
+    /// (with optional `?subdir=`), or empty when unknown.
+    #[serde(default)]
+    pub url: String,
 }
 
 /// One composable extension applied on top of a template.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AddonEntry {
-    /// Stable slug used with `--addons` (for example `github-setup`).
+    /// Stable slug used with `--addons` (for example `all-github-setup`).
     pub slug: String,
     /// One-line human description.
     #[serde(default)]
     pub description: String,
+    /// Overlay source: `file://` directory, git URL (with optional
+    /// `?subdir=`), or empty when unknown.
+    #[serde(default)]
+    pub url: String,
 }
 
 /// The full template/addon bank served as `templates.json`.
@@ -43,8 +51,9 @@ pub struct Catalog {
     /// Available project templates.
     #[serde(default)]
     pub templates: Vec<TemplateEntry>,
-    /// Available addons.
-    #[serde(default)]
+    /// Available addons. The official bank serves these under the
+    /// `extensions` key, so both spellings deserialize here.
+    #[serde(default, alias = "extensions")]
     pub addons: Vec<AddonEntry>,
 }
 
@@ -172,16 +181,19 @@ mod tests {
                     slug: "web-server".to_string(),
                     description: "Axum web server".to_string(),
                     tags: vec!["web".to_string()],
+                    url: "file:///bank/web-server".to_string(),
                 },
                 TemplateEntry {
                     slug: "cli".to_string(),
                     description: "Clap CLI starter".to_string(),
                     tags: vec!["tooling".to_string()],
+                    url: String::new(),
                 },
             ],
             addons: vec![AddonEntry {
                 slug: "github-setup".to_string(),
                 description: "CI workflows".to_string(),
+                url: "file:///bank/github-setup".to_string(),
             }],
         }
     }
@@ -258,5 +270,30 @@ mod tests {
             resolved,
             PathBuf::from("/tmp/fixtures").join("templates.json")
         );
+    }
+}
+
+#[cfg(test)]
+mod extensions_key_tests {
+    use super::*;
+
+    #[test]
+    fn reads_official_bank_extensions_key_as_addons() {
+        let raw = r#"{
+            "templates": [{"slug": "axum-starter", "url": "file:///bank/axum-starter"}],
+            "extensions": [{"slug": "all-github-setup", "url": "file:///bank/all-github-setup"}]
+        }"#;
+        let catalog: Catalog = serde_json::from_str(raw).expect("parse");
+        assert_eq!(catalog.templates.len(), 1);
+        assert_eq!(catalog.addons.len(), 1);
+        assert_eq!(catalog.addons[0].slug, "all-github-setup");
+        assert_eq!(catalog.addons[0].url, "file:///bank/all-github-setup");
+    }
+
+    #[test]
+    fn tolerates_entries_without_source_url() {
+        let raw = r#"{"templates": [{"slug": "legacy"}], "addons": []}"#;
+        let catalog: Catalog = serde_json::from_str(raw).expect("parse");
+        assert_eq!(catalog.templates[0].url, String::new());
     }
 }

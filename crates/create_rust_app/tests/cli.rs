@@ -15,6 +15,33 @@ fn fixture_catalog() -> String {
         .to_string()
 }
 
+/// Build a catalog whose entries point at `file://` template sources inside
+/// `dir`, so scaffold tests run hermetically without network access.
+fn scaffold_catalog(dir: &std::path::Path) -> String {
+    let template = dir.join("templates").join("web-server");
+    fs::create_dir_all(template.join("src")).expect("mkdir template fixture");
+    fs::write(
+        template.join("Cargo.toml"),
+        "[package]\nname = \"web-server\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .expect("write template manifest");
+    fs::write(template.join("src/main.rs"), "fn main() {}\n").expect("write template main");
+    let addon = dir.join("extensions").join("github-setup").join("template");
+    fs::create_dir_all(&addon).expect("mkdir addon fixture");
+    fs::write(addon.join("ci.yml"), "# ci\n").expect("write addon overlay");
+    let catalog = format!(
+        r#"{{"templates": [{{"slug": "web-server", "description": "Axum web server starter", "tags": ["web"], "url": "file://{template}"}}], "addons": [{{"slug": "github-setup", "description": "GitHub CI workflows and community files", "url": "file://{addon_root}"}}]}}"#,
+        template = template.to_string_lossy(),
+        addon_root = dir
+            .join("extensions")
+            .join("github-setup")
+            .to_string_lossy(),
+    );
+    let path = dir.join("catalog.json");
+    fs::write(&path, catalog).expect("write catalog fixture");
+    path.to_string_lossy().to_string()
+}
+
 #[test]
 fn version_flag_reports_package_version() {
     let output = Command::new(binary())
@@ -111,6 +138,7 @@ fn info_flag_reports_environment() {
 fn scaffolds_project_headless() {
     let dir = tempfile::tempdir().expect("tempdir");
     let project = dir.path().join("my-api");
+    let catalog = scaffold_catalog(dir.path());
     let output = Command::new(binary())
         .current_dir(dir.path())
         .args([
@@ -123,7 +151,7 @@ fn scaffolds_project_headless() {
             "--no-install",
             "--catalog-path",
         ])
-        .arg(fixture_catalog())
+        .arg(catalog)
         .output()
         .expect("run binary");
     assert!(
@@ -139,6 +167,7 @@ fn scaffolds_project_headless() {
 #[test]
 fn rejects_invalid_set_override() {
     let dir = tempfile::tempdir().expect("tempdir");
+    let catalog = scaffold_catalog(dir.path());
     let output = Command::new(binary())
         .current_dir(dir.path())
         .args([
@@ -151,7 +180,7 @@ fn rejects_invalid_set_override() {
             "--no-install",
             "--catalog-path",
         ])
-        .arg(fixture_catalog())
+        .arg(catalog)
         .output()
         .expect("run binary");
     assert!(!output.status.success());
