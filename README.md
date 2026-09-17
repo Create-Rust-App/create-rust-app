@@ -26,7 +26,7 @@ curl -fsSL https://create-awesome-rust-app.vercel.app/install.sh | sh
 ```
 
 Installs `create-rust-app` and a `create-awesome-rust-app` alias into `~/.local/bin`
-(override with `CRA_INSTALL_DIR`). Pin a version with `CRA_VERSION=0.1.0`.
+(override with `CRA_INSTALL_DIR`). Pin a version with `CRA_VERSION=0.2.1`.
 
 Then scaffold:
 
@@ -48,7 +48,7 @@ Download a specific platform binary from the Releases page:
 
 ```bash
 curl -fsSL -o create-rust-app \
-  "https://github.com/Create-Rust-App/create-rust-app/releases/download/create-rust-app%400.1.0/create-rust-app-linux-x86_64"
+  "https://github.com/Create-Rust-App/create-rust-app/releases/download/create-rust-app%400.2.1/create-rust-app-linux-x86_64"
 chmod +x create-rust-app
 mv create-rust-app ~/.local/bin/
 ```
@@ -110,9 +110,9 @@ Override with `--catalog-path` or a fork for local testing (`file://` supported)
 
 Tagged `create-rust-app@X.Y.Z` releases draft a GitHub Release with a
 five-target binary matrix (Linux x86_64 required; Linux arm64, macOS arm64,
-macOS x86_64, and Windows x86_64 best-effort) plus `SHA256SUMS`. Crates.io
-metadata is complete in both `Cargo.toml` manifests, but nothing is published
-there yet.
+macOS x86_64, and Windows x86_64 best-effort) plus `SHA256SUMS`, and publish
+both crates to [crates.io](https://crates.io/crates/create-awesome-rust-app)
+via Trusted Publishing (no stored tokens).
 
 ## License
 
