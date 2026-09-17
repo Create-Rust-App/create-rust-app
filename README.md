@@ -9,7 +9,12 @@ One command. Any Rust stack.
 [![Tests](https://github.com/Create-Rust-App/create-rust-app/actions/workflows/test.yml/badge.svg)](https://github.com/Create-Rust-App/create-rust-app/actions/workflows/test.yml)
 [![Lint](https://github.com/Create-Rust-App/create-rust-app/actions/workflows/lint.yml/badge.svg)](https://github.com/Create-Rust-App/create-rust-app/actions/workflows/lint.yml)
 [![Release](https://img.shields.io/github/v/release/Create-Rust-App/create-rust-app?filter=create-rust-app%40*&style=flat-square&label=Release)](https://github.com/Create-Rust-App/create-rust-app/releases)
+[![Crates.io](https://img.shields.io/crates/v/create-awesome-rust-app.svg?style=flat-square)](https://crates.io/crates/create-awesome-rust-app)
+[![Crates.io Downloads](https://img.shields.io/crates/d/create-awesome-rust-app.svg?style=flat-square)](https://crates.io/crates/create-awesome-rust-app)
+[![AUR](https://img.shields.io/aur/version/create-awesome-rust-app?style=flat-square&label=AUR&logo=archlinux)](https://aur.archlinux.org/packages/create-awesome-rust-app)
+[![Homebrew](https://img.shields.io/badge/homebrew-Create--Rust--App%2Ftap-orange?style=flat-square&logo=homebrew)](https://github.com/Create-Rust-App/homebrew-tap)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
+[![Discord](https://img.shields.io/discord/1527933660764831825?style=flat-square&label=Discord&logo=discord&logoColor=white)](https://discord.gg/bR5VyATgka)
 
 [Catalog](https://github.com/Create-Rust-App/cra-templates) · [Contributing](CONTRIBUTING.md) · [Releases](https://github.com/Create-Rust-App/create-rust-app/releases)
 
