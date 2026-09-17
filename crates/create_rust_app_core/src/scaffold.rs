@@ -509,6 +509,7 @@ fn copy_tree(src: &Path, dst: &Path, display: &str) -> Result<(), EngineError> {
         request: display.to_string(),
         detail: format!("cannot read template source '{}': {source}", src.display()),
     })?;
+    let mut deferred: Vec<(PathBuf, PathBuf)> = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|source| EngineError::TemplateFetch {
             request: display.to_string(),
@@ -538,13 +539,145 @@ fn copy_tree(src: &Path, dst: &Path, display: &str) -> Result<(), EngineError> {
                     source,
                 })?;
             }
-            fs::copy(&from, &to).map_err(|source| EngineError::ProjectWrite {
-                path: to.to_string_lossy().to_string(),
-                source,
-            })?;
+            // Fragments apply after every plain copy in this overlay pass,
+            // so readdir order can never clobber an applied fragment with
+            // the file it extends.
+            if strip_append_suffix(&from).is_some() {
+                deferred.push((from, to));
+                continue;
+            }
+            if entry.file_name() == "Cargo.toml" && to.is_file() {
+                merge_manifest(&to, &from, display)?;
+            } else {
+                fs::copy(&from, &to).map_err(|source| EngineError::ProjectWrite {
+                    path: to.to_string_lossy().to_string(),
+                    source,
+                })?;
+            }
         }
     }
+    for (from, to) in deferred {
+        let stripped = strip_append_suffix(&from).expect("append suffix");
+        let target = to.parent().unwrap_or_else(|| Path::new("")).join(stripped);
+        append_fragment(&from, &target, display)?;
+    }
     Ok(())
+}
+
+/// Dependency tables merged from overlay manifests into the project manifest.
+///
+/// Only these tables are merged; every other overlay section is ignored by
+/// contract (extension manifests must not restate `[package]` or targets).
+const MERGED_DEP_TABLES: [&str; 3] = ["dependencies", "dev-dependencies", "build-dependencies"];
+
+/// Strip a trailing `.append` overlay suffix, returning the target file name.
+///
+/// `router.rs.append` merges into `router.rs`; plain files return `None`.
+fn strip_append_suffix(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_str()?;
+    name.strip_suffix(".append").map(str::to_string)
+}
+
+/// Append an overlay fragment to a project file.
+///
+/// A missing target is created from the fragment; otherwise the fragment is
+/// appended after a single trailing newline. This is how extensions register
+/// routers, modules, env keys, and docs without forking template files.
+fn append_fragment(fragment: &Path, target: &Path, display: &str) -> Result<(), EngineError> {
+    let addition = fs::read(fragment).map_err(|source| EngineError::TemplateFetch {
+        request: display.to_string(),
+        detail: format!(
+            "cannot read overlay fragment '{}': {source}",
+            fragment.display()
+        ),
+    })?;
+    if addition.is_empty() {
+        return Ok(());
+    }
+    let mut base = if target.is_file() {
+        fs::read(target).map_err(|source| EngineError::ProjectWrite {
+            path: target.to_string_lossy().to_string(),
+            source,
+        })?
+    } else {
+        Vec::new()
+    };
+    if !base.is_empty() && !base.ends_with(b"\n") {
+        base.push(b'\n');
+    }
+    base.extend_from_slice(&addition);
+    fs::write(target, base).map_err(|source| EngineError::ProjectWrite {
+        path: target.to_string_lossy().to_string(),
+        source,
+    })
+}
+
+/// Merge an overlay `Cargo.toml` into the project manifest.
+///
+/// Dependency entries missing from the project are added; identical entries
+/// are skipped. A conflicting requirement for the same dependency fails the
+/// scaffold with both specs named, so extension authors resolve version
+/// clashes explicitly instead of shipping silent downgrades.
+fn merge_manifest(target: &Path, overlay: &Path, display: &str) -> Result<(), EngineError> {
+    let target_raw = fs::read_to_string(target).map_err(|source| EngineError::ProjectWrite {
+        path: target.to_string_lossy().to_string(),
+        source,
+    })?;
+    let overlay_raw = fs::read_to_string(overlay).map_err(|source| EngineError::TemplateFetch {
+        request: display.to_string(),
+        detail: format!(
+            "cannot read overlay manifest '{}': {source}",
+            overlay.display()
+        ),
+    })?;
+    let mut document: toml_edit::DocumentMut =
+        target_raw
+            .parse()
+            .map_err(|source| EngineError::TemplateMaterialize {
+                path: target.to_string_lossy().to_string(),
+                detail: format!("cannot parse project Cargo.toml: {source}"),
+            })?;
+    let overlay_doc: toml_edit::DocumentMut =
+        overlay_raw
+            .parse()
+            .map_err(|source| EngineError::TemplateMaterialize {
+                path: overlay.to_string_lossy().to_string(),
+                detail: format!("cannot parse overlay Cargo.toml: {source}"),
+            })?;
+    for table in MERGED_DEP_TABLES {
+        let Some(items) = overlay_doc.get(table).and_then(|node| node.as_table()) else {
+            continue;
+        };
+        let target_table =
+            document[table].or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+        let Some(target_items) = target_table.as_table_mut() else {
+            return Err(EngineError::TemplateMaterialize {
+                path: target.to_string_lossy().to_string(),
+                detail: format!("project Cargo.toml [{table}] is not a table"),
+            });
+        };
+        for (name, item) in items {
+            match target_items.get(name) {
+                None => {
+                    target_items.insert(name, item.clone());
+                }
+                Some(existing) if existing.to_string() == item.to_string() => {}
+                Some(existing) => {
+                    return Err(EngineError::TemplateMaterialize {
+                        path: target.to_string_lossy().to_string(),
+                        detail: format!(
+                            "dependency conflict on '{name}': project requires {existing} but overlay '{}' requires {item}",
+                            overlay.display(),
+                        ),
+                    });
+                }
+            }
+        }
+    }
+    fs::write(target, document.to_string()).map_err(|source| EngineError::ProjectWrite {
+        path: target.to_string_lossy().to_string(),
+        source,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1089,6 +1222,90 @@ mod tests {
             manifest.contains("name = \"my_api\""),
             "lib renamed, got: {manifest}"
         );
+    }
+
+    #[test]
+    fn appends_fragments_to_existing_and_missing_targets() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fragment = dir.path().join("router.rs.append");
+        fs::write(&fragment, "pub mod auth;\n").expect("write fragment");
+        let target = dir.path().join("router.rs");
+        append_fragment(&fragment, &target, "test").expect("create from fragment");
+        assert_eq!(
+            fs::read_to_string(&target).expect("read"),
+            "pub mod auth;\n"
+        );
+        fs::write(&target, "pub mod health;").expect("rewrite without newline");
+        append_fragment(&fragment, &target, "test").expect("append");
+        assert_eq!(
+            fs::read_to_string(&target).expect("read"),
+            "pub mod health;\npub mod auth;\n"
+        );
+    }
+
+    #[test]
+    fn merges_overlay_manifest_dependencies() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = dir.path().join("Cargo.toml");
+        let overlay = dir.path().join("overlay.toml");
+        fs::write(
+            &target,
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1\"\n",
+        )
+        .expect("write target");
+        fs::write(
+            &overlay,
+            "[package]\nname = \"ignored\"\n\n[dependencies]\nserde = \"1\"\njsonwebtoken = \"9\"\n",
+        )
+        .expect("write overlay");
+        merge_manifest(&target, &overlay, "test").expect("merge");
+        let merged = fs::read_to_string(&target).expect("read");
+        assert!(merged.contains("name = \"demo\""), "package untouched");
+        assert!(merged.contains("jsonwebtoken"), "new dep added");
+        assert!(!merged.contains("ignored"), "overlay package ignored");
+    }
+
+    #[test]
+    fn rejects_conflicting_overlay_dependencies() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = dir.path().join("Cargo.toml");
+        let overlay = dir.path().join("overlay.toml");
+        fs::write(&target, "[dependencies]\nserde = \"1\"\n").expect("write target");
+        fs::write(&overlay, "[dependencies]\nserde = \"2\"\n").expect("write overlay");
+        let err = merge_manifest(&target, &overlay, "test").expect_err("conflict");
+        assert!(
+            matches!(err, EngineError::TemplateMaterialize { .. }),
+            "conflict surfaces, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn applies_addon_fragments_and_manifest_merge() {
+        let mut fixture = fixture("fragment-app");
+        // Addon overlay: a `.append` fragment plus a dependency-only manifest.
+        let addon_root = fixture
+            .catalog
+            .addons
+            .iter()
+            .find(|entry| entry.slug == "demo-ex")
+            .expect("demo addon")
+            .url
+            .strip_prefix("file://")
+            .expect("file url")
+            .to_string();
+        let overlay_root = Path::new(&addon_root).join("template");
+        fs::write(overlay_root.join("extra.txt.append"), "more\n").expect("write fragment");
+        fs::write(
+            overlay_root.join("Cargo.toml"),
+            "[dependencies]\nserde = \"1\"\n",
+        )
+        .expect("write overlay manifest");
+        fixture.options.addons = vec!["demo-ex".to_string()];
+        let target = scaffold(&fixture.options, &fixture.catalog).expect("scaffold");
+        let extra = fs::read_to_string(target.join("extra.txt")).expect("read overlay");
+        assert_eq!(extra, "overlay\nmore\n", "fragment appended, got: {extra}");
+        let manifest = fs::read_to_string(target.join("Cargo.toml")).expect("read manifest");
+        assert!(manifest.contains("serde"), "overlay dep merged");
     }
 
     #[test]
