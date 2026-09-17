@@ -1191,7 +1191,30 @@ fn scaffold_inner(
             detail: format!("cannot rewrite package references: {source}"),
         }
     })?;
+    // Best-effort `cargo fmt` so composed output stays rustfmt-clean (e.g.
+    // `.append` module registrations land sorted). Never fails the scaffold:
+    // rustfmt may be missing or the project may not parse in isolation.
+    format_project(target);
     Ok(target.to_path_buf())
+}
+
+/// Best-effort `cargo fmt --all` on the scaffolded project.
+fn format_project(target: &Path) {
+    let formatted = std::process::Command::new("cargo")
+        .arg("fmt")
+        .arg("--all")
+        .current_dir(target)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+    if !formatted {
+        eprintln!(
+            "note: post-scaffold `cargo fmt` reported issues (run `cargo fmt` in {} for details)",
+            target.display()
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1453,6 +1476,66 @@ mod tests {
         assert!(
             test.contains("use addon_rename_app::greet;"),
             "addon reference rewritten, got: {test}"
+        );
+    }
+
+    #[test]
+    fn formats_composed_output() {
+        if !std::process::Command::new("cargo")
+            .arg("fmt")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+        {
+            eprintln!("skipping formats_composed_output: rustfmt unavailable");
+            return;
+        }
+        let mut fixture = fixture("fmt-app");
+        let template_root = fixture
+            .catalog
+            .templates
+            .iter()
+            .find(|entry| entry.slug == "demo")
+            .expect("demo template")
+            .url
+            .strip_prefix("file://")
+            .expect("file url")
+            .to_string();
+        let addon_root = fixture
+            .catalog
+            .addons
+            .iter()
+            .find(|entry| entry.slug == "demo-ex")
+            .expect("demo addon")
+            .url
+            .strip_prefix("file://")
+            .expect("file url")
+            .to_string();
+        // Unsorted on purpose: the fragment appends `apple` after `zebra`,
+        // and the post-scaffold format must sort them. Module files exist
+        // like in a real bank, otherwise rustfmt cannot resolve them.
+        fs::write(
+            Path::new(&template_root).join("src/lib.rs"),
+            "pub mod zebra;\n",
+        )
+        .expect("write lib");
+        fs::write(Path::new(&template_root).join("src/zebra.rs"), "").expect("write zebra");
+        fs::create_dir_all(Path::new(&addon_root).join("template/src")).expect("mkdir overlay src");
+        fs::write(
+            Path::new(&addon_root).join("template/src/lib.rs.append"),
+            "pub mod apple;\n",
+        )
+        .expect("write fragment");
+        fs::write(Path::new(&addon_root).join("template/src/apple.rs"), "").expect("write apple");
+        fixture.options.addons = vec!["demo-ex".to_string()];
+        let target = scaffold(&fixture.options, &fixture.catalog).expect("scaffold");
+        let lib = fs::read_to_string(target.join("src/lib.rs")).expect("read lib");
+        assert_eq!(
+            lib, "pub mod apple;\npub mod zebra;\n",
+            "composed lib sorted, got: {lib}"
         );
     }
 
