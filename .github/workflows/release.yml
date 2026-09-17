@@ -19,6 +19,6 @@ jobs:
         uses: katyo/publish-crates@v2
         with:
           registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-          path: crates/create_rust_app_cli
+          path: crates/create_rust_app
           check-repo: false
           args: --locked
