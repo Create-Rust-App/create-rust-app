@@ -26,7 +26,7 @@ curl -fsSL https://create-awesome-rust-app.vercel.app/install.sh | sh
 ```
 
 Installs `create-rust-app` and a `create-awesome-rust-app` alias into `~/.local/bin`
-(override with `CRA_INSTALL_DIR`). Pin a version with `CRA_VERSION=0.2.1`.
+(override with `CRA_INSTALL_DIR`). Pin a version with `CRA_VERSION=0.4.0`.
 
 Then scaffold:
 
@@ -48,7 +48,7 @@ Download a specific platform binary from the Releases page:
 
 ```bash
 curl -fsSL -o create-rust-app \
-  "https://github.com/Create-Rust-App/create-rust-app/releases/download/create-rust-app%400.2.1/create-rust-app-linux-x86_64"
+  "https://github.com/Create-Rust-App/create-rust-app/releases/download/create-rust-app%400.4.0/create-rust-app-linux-x86_64"
 chmod +x create-rust-app
 mv create-rust-app ~/.local/bin/
 ```
