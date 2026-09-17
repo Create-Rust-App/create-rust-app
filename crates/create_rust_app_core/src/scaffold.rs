@@ -657,27 +657,120 @@ fn merge_manifest(target: &Path, overlay: &Path, display: &str) -> Result<(), En
             });
         };
         for (name, item) in items {
-            match target_items.get(name) {
-                None => {
-                    target_items.insert(name, item.clone());
-                }
-                Some(existing) if existing.to_string() == item.to_string() => {}
-                Some(existing) => {
-                    return Err(EngineError::TemplateMaterialize {
-                        path: target.to_string_lossy().to_string(),
-                        detail: format!(
-                            "dependency conflict on '{name}': project requires {existing} but overlay '{}' requires {item}",
-                            overlay.display(),
-                        ),
-                    });
-                }
+            if target_items.get(name).is_none() {
+                target_items.insert(name, item.clone());
+                continue;
             }
+            let existing = target_items.get(name).expect("dependency present").clone();
+            if existing.to_string() == item.to_string() {
+                continue;
+            }
+            merge_dep_spec(target_items, name, &existing, item, target, overlay)?;
         }
     }
     fs::write(target, document.to_string()).map_err(|source| EngineError::ProjectWrite {
         path: target.to_string_lossy().to_string(),
         source,
     })
+}
+
+/// Split a dependency spec into its version requirement, feature list, and
+/// remaining keys (everything except `version` and `features`, rendered for
+/// comparison). Exotic specs (dotted table headers) are fingerprinted by
+/// their rendered text so differing ones always conflict.
+fn dep_parts(item: &toml_edit::Item) -> (Option<String>, Vec<String>, Vec<(String, String)>) {
+    let table = match item {
+        toml_edit::Item::Value(toml_edit::Value::String(text)) => {
+            return (Some(text.value().to_string()), Vec::new(), Vec::new());
+        }
+        toml_edit::Item::Value(toml_edit::Value::InlineTable(table)) => table,
+        _ => {
+            return (
+                None,
+                Vec::new(),
+                vec![("spec".to_string(), item.to_string())],
+            );
+        }
+    };
+    let version = table
+        .get("version")
+        .and_then(toml_edit::Value::as_str)
+        .map(str::to_string);
+    let features = table
+        .get("features")
+        .and_then(toml_edit::Value::as_array)
+        .map(|array| {
+            array
+                .iter()
+                .filter_map(toml_edit::Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut rest: Vec<(String, String)> = table
+        .iter()
+        .filter(|(key, _)| *key != "version" && *key != "features")
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect();
+    rest.sort();
+    (version, features, rest)
+}
+
+/// Merge one conflicting dependency spec from an overlay manifest.
+///
+/// Additive differences compose: when both sides require the same version
+/// with the same remaining keys, their `features` unite in the project
+/// manifest (this is how extensions enable extra functionality on template
+/// dependencies, e.g. `tower-http` with `cors` next to `trace`). Anything
+/// else — different versions, different sources or flags — fails naming
+/// both specs so authors resolve the clash explicitly.
+#[allow(clippy::too_many_arguments)]
+fn merge_dep_spec(
+    target_items: &mut toml_edit::Table,
+    name: &str,
+    existing: &toml_edit::Item,
+    item: &toml_edit::Item,
+    target: &Path,
+    overlay: &Path,
+) -> Result<(), EngineError> {
+    let conflict = || {
+        EngineError::TemplateMaterialize {
+        path: target.to_string_lossy().to_string(),
+        detail: format!(
+            "dependency conflict on '{name}': project requires {existing} but overlay '{}' requires {item}",
+            overlay.display(),
+        ),
+    }
+    };
+    let (existing_version, existing_features, existing_rest) = dep_parts(existing);
+    let (overlay_version, overlay_features, overlay_rest) = dep_parts(item);
+    if existing_version != overlay_version || existing_rest != overlay_rest {
+        return Err(conflict());
+    }
+    let mut merged = existing_features;
+    for feature in overlay_features {
+        if !merged.contains(&feature) {
+            merged.push(feature);
+        }
+    }
+    if merged == dep_parts(existing).1 {
+        return Ok(());
+    }
+    match target_items.get_mut(name) {
+        Some(toml_edit::Item::Value(toml_edit::Value::InlineTable(table))) => {
+            let mut array = toml_edit::Array::new();
+            for feature in &merged {
+                array.push(toml_edit::Value::from(feature.as_str()));
+            }
+            table.insert("features", toml_edit::Value::Array(array));
+        }
+        // The project pins a bare version string while the overlay carries
+        // the fuller spec (features): adopt the overlay entry.
+        _ => {
+            target_items.insert(name, item.clone());
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1263,6 +1356,28 @@ mod tests {
         assert!(merged.contains("name = \"demo\""), "package untouched");
         assert!(merged.contains("jsonwebtoken"), "new dep added");
         assert!(!merged.contains("ignored"), "overlay package ignored");
+    }
+
+    #[test]
+    fn unions_features_on_matching_versions() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = dir.path().join("Cargo.toml");
+        let overlay = dir.path().join("overlay.toml");
+        fs::write(
+            &target,
+            "[dependencies]\ntower-http = { version = \"0.5\", features = [\"trace\"] }\n",
+        )
+        .expect("write target");
+        fs::write(
+            &overlay,
+            "[dependencies]\ntower-http = { version = \"0.5\", features = [\"cors\", \"trace\"] }\n",
+        )
+        .expect("write overlay");
+        merge_manifest(&target, &overlay, "test").expect("union");
+        let merged = fs::read_to_string(&target).expect("read");
+        assert!(merged.contains("\"trace\""), "keeps target features");
+        assert!(merged.contains("\"cors\""), "adds overlay features");
+        assert_eq!(merged.matches("tower-http").count(), 1, "single entry");
     }
 
     #[test]
