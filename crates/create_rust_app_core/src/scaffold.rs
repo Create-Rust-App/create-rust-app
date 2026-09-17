@@ -1163,14 +1163,6 @@ fn scaffold_inner(
             detail: format!("cannot rewrite Cargo.toml: {source}"),
         }
     })?;
-    // Point code, lockfile, and docs at the new package/library names so the
-    // scaffolded project compiles without manual edits.
-    rewrite_package_references(target, &old_names, package, &snake).map_err(|source| {
-        EngineError::TemplateMaterialize {
-            path: target.to_string_lossy().to_string(),
-            detail: format!("cannot rewrite package references: {source}"),
-        }
-    })?;
     merge_project_config(
         target,
         &options.project,
@@ -1189,6 +1181,16 @@ fn scaffold_inner(
         let overlay = if overlay.is_dir() { overlay } else { addon_dir };
         copy_tree(&overlay, target, addon)?;
     }
+    // Point code, lockfile, and docs at the new package/library names so the
+    // scaffolded project compiles without manual edits. Runs after every
+    // overlay lands so addon-provided files (tests, modules) are rewritten
+    // too — not just template sources.
+    rewrite_package_references(target, &old_names, package, &snake).map_err(|source| {
+        EngineError::TemplateMaterialize {
+            path: target.to_string_lossy().to_string(),
+            detail: format!("cannot rewrite package references: {source}"),
+        }
+    })?;
     Ok(target.to_path_buf())
 }
 
@@ -1421,6 +1423,37 @@ mod tests {
         assert_eq!(extra, "overlay\nmore\n", "fragment appended, got: {extra}");
         let manifest = fs::read_to_string(target.join("Cargo.toml")).expect("read manifest");
         assert!(manifest.contains("serde"), "overlay dep merged");
+    }
+
+    #[test]
+    fn rewrites_addon_provided_references() {
+        let mut fixture = fixture("addon-rename-app");
+        let addon_root = fixture
+            .catalog
+            .addons
+            .iter()
+            .find(|entry| entry.slug == "demo-ex")
+            .expect("demo addon")
+            .url
+            .strip_prefix("file://")
+            .expect("file url")
+            .to_string();
+        let overlay_root = Path::new(&addon_root).join("template");
+        fs::create_dir_all(overlay_root.join("tests")).expect("mkdir tests");
+        // Addon test referencing the template's original library name: the
+        // post-overlay rewrite must repoint it at the new project.
+        fs::write(
+            overlay_root.join("tests/test_ext.rs"),
+            "use demo_lib::greet;\n\n#[test]\nfn calls_lib() {\n    greet();\n}\n",
+        )
+        .expect("write addon test");
+        fixture.options.addons = vec!["demo-ex".to_string()];
+        let target = scaffold(&fixture.options, &fixture.catalog).expect("scaffold");
+        let test = fs::read_to_string(target.join("tests/test_ext.rs")).expect("read test");
+        assert!(
+            test.contains("use addon_rename_app::greet;"),
+            "addon reference rewritten, got: {test}"
+        );
     }
 
     #[test]
