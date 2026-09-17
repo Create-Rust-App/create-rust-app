@@ -45,9 +45,16 @@ pub fn clean_cache() -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serialise tests that mutate the process-global `CRA_CACHE_DIR`:
+    /// the test runner executes tests on parallel threads sharing one
+    /// environment, so unguarded `set_var` calls race and flake.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn respects_cache_dir_override() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
         let key = "CRA_CACHE_DIR";
         let previous = std::env::var(key).ok();
         std::env::set_var(key, "/tmp/cra-cache-test");
@@ -60,6 +67,7 @@ mod tests {
 
     #[test]
     fn cleaning_missing_cache_is_noop() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
         let key = "CRA_CACHE_DIR";
         let previous = std::env::var(key).ok();
         let dir = tempfile::tempdir().expect("tempdir");
