@@ -566,9 +566,17 @@ fn copy_tree(src: &Path, dst: &Path, display: &str) -> Result<(), EngineError> {
 
 /// Dependency tables merged from overlay manifests into the project manifest.
 ///
-/// Only these tables are merged; every other overlay section is ignored by
-/// contract (extension manifests must not restate `[package]` or targets).
+/// Only these tables plus [`MERGED_TARGET_TABLES`] are merged; every other
+/// overlay section is ignored by contract (extension manifests must not
+/// restate `[package]` or other metadata).
 const MERGED_DEP_TABLES: [&str; 3] = ["dependencies", "dev-dependencies", "build-dependencies"];
+
+/// Target sections merged from overlay manifests into the project manifest.
+///
+/// Entries merge by `name`: missing entries are added, identical entries are
+/// skipped, and a conflicting declaration for the same target fails the
+/// scaffold naming both specs.
+const MERGED_TARGET_TABLES: [&str; 3] = ["bench", "example", "test"];
 
 /// Strip a trailing `.append` overlay suffix, returning the target file name.
 ///
@@ -668,10 +676,77 @@ fn merge_manifest(target: &Path, overlay: &Path, display: &str) -> Result<(), En
             merge_dep_spec(target_items, name, &existing, item, target, overlay)?;
         }
     }
+    for table in MERGED_TARGET_TABLES {
+        merge_target_section(&mut document, &overlay_doc, table, target, overlay)?;
+    }
     fs::write(target, document.to_string()).map_err(|source| EngineError::ProjectWrite {
         path: target.to_string_lossy().to_string(),
         source,
     })
+}
+
+/// Merge one `[[bench]]`/`[[example]]`/`[[test]]` section by target `name`.
+fn merge_target_section(
+    document: &mut toml_edit::DocumentMut,
+    overlay_doc: &toml_edit::DocumentMut,
+    table: &str,
+    target: &Path,
+    overlay: &Path,
+) -> Result<(), EngineError> {
+    let Some(items) = overlay_doc
+        .get(table)
+        .and_then(|node| node.as_array_of_tables())
+    else {
+        return Ok(());
+    };
+    if items.is_empty() {
+        return Ok(());
+    }
+    if document.get(table).is_none() {
+        document[table] = toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new());
+    }
+    let Some(target_items) = document
+        .get_mut(table)
+        .and_then(|node| node.as_array_of_tables_mut())
+    else {
+        return Err(EngineError::TemplateMaterialize {
+            path: target.to_string_lossy().to_string(),
+            detail: format!("project Cargo.toml [[{table}]] is not an array of tables"),
+        });
+    };
+    for item in items {
+        let name = item
+            .get("name")
+            .and_then(|node| node.as_str())
+            .unwrap_or("");
+        let position = target_items.iter().position(|existing| {
+            existing
+                .get("name")
+                .and_then(|node| node.as_str())
+                .unwrap_or("")
+                == name
+        });
+        let Some(position) = position else {
+            target_items.push(item.clone());
+            continue;
+        };
+        if target_items
+            .get(position)
+            .expect("target present")
+            .to_string()
+            == item.to_string()
+        {
+            continue;
+        }
+        return Err(EngineError::TemplateMaterialize {
+            path: target.to_string_lossy().to_string(),
+            detail: format!(
+                "conflicting [[{table}]] {name:?} in overlay '{}'",
+                overlay.display()
+            ),
+        });
+    }
+    Ok(())
 }
 
 /// Split a dependency spec into its version requirement, feature list, and
@@ -1403,6 +1478,46 @@ mod tests {
         assert!(merged.contains("\"trace\""), "keeps target features");
         assert!(merged.contains("\"cors\""), "adds overlay features");
         assert_eq!(merged.matches("tower-http").count(), 1, "single entry");
+    }
+
+    #[test]
+    fn merges_bench_targets_by_name() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = dir.path().join("Cargo.toml");
+        let overlay = dir.path().join("overlay.toml");
+        fs::write(&target, "[package]\nname = \"demo\"\n").expect("write target");
+        fs::write(&overlay, "[[bench]]\nname = \"slug\"\nharness = false\n")
+            .expect("write overlay");
+        merge_manifest(&target, &overlay, "test").expect("union");
+        let merged = fs::read_to_string(&target).expect("read");
+        assert!(merged.contains("[[bench]]"), "bench section added");
+        assert!(merged.contains("harness = false"), "bench flags kept");
+        // Identical re-application is a no-op (single entry).
+        merge_manifest(&target, &overlay, "test").expect("idempotent");
+        let merged = fs::read_to_string(&target).expect("read");
+        assert_eq!(merged.matches("[[bench]]").count(), 1, "no duplicate");
+    }
+
+    #[test]
+    fn rejects_conflicting_bench_targets() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = dir.path().join("Cargo.toml");
+        let overlay = dir.path().join("overlay.toml");
+        fs::write(
+            &target,
+            "[package]\nname = \"demo\"\n\n[[bench]]\nname = \"slug\"\nharness = false\n",
+        )
+        .expect("write target");
+        fs::write(
+            &overlay,
+            "[[bench]]\nname = \"slug\"\npath = \"other.rs\"\n",
+        )
+        .expect("write overlay");
+        let err = merge_manifest(&target, &overlay, "test").expect_err("conflict");
+        assert!(
+            matches!(err, EngineError::TemplateMaterialize { .. }),
+            "conflict surfaces, got: {err:?}"
+        );
     }
 
     #[test]
