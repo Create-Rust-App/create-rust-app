@@ -1,0 +1,24 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "create-rust-app@*"
+
+permissions:
+  contents: read
+
+jobs:
+  crates-io:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Publish create-rust-app-cli
+        uses: katyo/publish-crates@v2
+        with:
+          registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          path: crates/create_rust_app_cli
+          check-repo: false
+          args: --locked
